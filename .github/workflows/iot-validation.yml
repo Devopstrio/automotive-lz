@@ -1,0 +1,47 @@
+name: 'IoT Payload CI/CD & Static Validation'
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/iot-engine/**'
+
+jobs:
+  validate-and-build:
+    name: 'Test Automotive Handlers'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v3
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install fastapi pytest httpx 
+
+    - name: Static Security Scan (Bandit)
+      run: |
+        pip install bandit
+        bandit -r ./apps/iot-engine
+
+    - name: Azure CLI Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Container Deployment Push
+      run: |
+        az acr login --name acrautoprod
+        docker build -t acrautoprod.azurecr.io/devopstrio/iot-engine:${{ github.sha }} ./apps/iot-engine
+        docker push acrautoprod.azurecr.io/devopstrio/iot-engine:${{ github.sha }}
+
+    - name: Zero Downtime Hand-off
+      run: |
+        az aks get-credentials --resource-group rg-auto-lz-platform-prd --name aks-auto-lz-host-prd
+        kubectl set image deployment/iot-engine fastapi-gateway=acrautoprod.azurecr.io/devopstrio/iot-engine:${{ github.sha }} -n automotive-prod
